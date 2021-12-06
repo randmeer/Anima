@@ -10,3 +10,6 @@ target_link_libraries(Anima PRIVATE /usr/local/Cellar/sdl2/2.0.18/lib/libSDL2.dy
 
 target_include_directories(Anima PRIVATE /usr/local/Cellar/sdl2_image/2.0.5/include/SDL2)
 target_link_libraries(Anima PRIVATE /usr/local/Cellar/sdl2_image/2.0.5/lib/libSDL2_image.dylib)
+
+target_include_directories(Anima PRIVATE /usr/local/Cellar/sdl2_gfx/1.0.4/include/SDL2)
+target_link_libraries(Anima PRIVATE /usr/local/Cellar/sdl2_gfx/1.0.4/lib/libSDL2_gfx.dylib)
