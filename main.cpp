@@ -1,4 +1,5 @@
 #include <sstream>
+#include <cmath>
 #include <SDL.h>
 #include <SDL_image.h>
 #include <SDL2_rotozoom.h>
@@ -8,6 +9,8 @@
 #define BACKGROUND_COLOR 255, 255, 255, 255
 #define LVL_W 18
 #define LVL_H 10
+#define SCALE 5
+#define BLOCKSIZE 10
 
 void tick_delta(double& delta_time, Uint64& NOW, Uint64 LAST) {
     LAST = NOW;
@@ -74,6 +77,29 @@ void generate_blocks(int (&blocks)[LVL_W][LVL_H], int& min, int& max, int& min_f
     }
 }
 
+void jump(bool &jumping, double &jumpvelocity, int& jumpmax, int terrainheight, int jumpheight) {
+    if (jumping) return;
+    jumping = true;
+    jumpvelocity = 1;
+    jumpmax = WINDOW_HEIGHT-(terrainheight*BLOCKSIZE*SCALE)-jumpheight-(2*BLOCKSIZE*SCALE);
+}
+
+void fall(bool &jumping, double &jumpvelocity) {
+    if (jumping) return;
+    jumping = true;
+    jumpvelocity = 0;
+}
+
+SDL_Texture* get_player_frame(SDL_Texture* playerframes[8], int &frameindex, double frametimer, double &_frametimer, double deltatime) {
+    if (_frametimer < 0) {
+        if (frameindex >= 7) frameindex = 0;
+        else frameindex++;
+        _frametimer = frametimer;
+    }
+    else _frametimer -= (deltatime/1000);
+    return playerframes[frameindex];
+}
+
 int main(){
     // event handling
     bool quit = false;
@@ -114,35 +140,44 @@ int main(){
     SDL_Rect _playerblit;
     playersrc.x = 0;
     playersrc.y = 0;
-    playersrc.w = 50;
-    playersrc.h = 100;
-    playerdest.x = 0;
-    playerdest.y = 0;
-    playerdest.w = 50;
-    playerdest.h = 100;
+    playersrc.w = BLOCKSIZE*SCALE;
+    playersrc.h = 2*BLOCKSIZE*SCALE;
+    playerdest.x = 2*BLOCKSIZE*SCALE;
+    playerdest.y = 6*BLOCKSIZE*SCALE;
+    playerdest.w = BLOCKSIZE*SCALE;
+    playerdest.h = 2*BLOCKSIZE*SCALE;
     _playerblit.x = 0;
-    _playerblit.y = -20;
-    _playerblit.w = 10;
-    _playerblit.h = 20;
-    SDL_Surface* playersurf = SDL_CreateRGBSurface(0,10,20,32, 0xff, 0xff00, 0xff0000, 0xff000000);
-    SDL_BlitSurface(textures, nullptr, playersurf, &_playerblit);
-    playersurf = rotozoomSurface(playersurf, 0.0, 5, 0);
-    SDL_Texture* playertex = SDL_CreateTextureFromSurface(renderer, playersurf);
+    _playerblit.y = -2*BLOCKSIZE;
+    _playerblit.w = BLOCKSIZE;
+    _playerblit.h = 2*BLOCKSIZE;
+    SDL_Surface* playersurf;
+    SDL_Texture* playertex;
+    double frametimer = 0.1; // time between frame in seconds
+    double _frametimer = frametimer;
+    int frameindex = 0;
+    SDL_Texture *playerframes[8];
+    for (int i = 0; i < 8; i++) {
+        _playerblit.x = -BLOCKSIZE * i;
+        _playerblit.y = -2*BLOCKSIZE;
+        playersurf = SDL_CreateRGBSurface(0,10,20,32, 0xff, 0xff00, 0xff0000, 0xff000000);
+        SDL_BlitSurface(textures, nullptr, playersurf, &_playerblit);
+        playersurf = rotozoomSurface(playersurf, 0.0, 5, 0);
+        playertex = SDL_CreateTextureFromSurface(renderer, playersurf);
+        playerframes[i] = playertex;
+    }
     SDL_FreeSurface(playersurf);
 
     // blocks
-    #define BLOCKSIZE 10
-    #define BLOCKSCALE 5
     SDL_Rect SrcR;
     SDL_Rect DestR;
     SrcR.x = 0;
     SrcR.y = 0;
-    SrcR.w = BLOCKSIZE*BLOCKSCALE;
-    SrcR.h = BLOCKSIZE*BLOCKSCALE;
+    SrcR.w = BLOCKSIZE*SCALE;
+    SrcR.h = BLOCKSIZE*SCALE;
     DestR.x = 0;
     DestR.y = 0;
-    DestR.w = BLOCKSIZE*BLOCKSCALE;
-    DestR.h = BLOCKSIZE*BLOCKSCALE;
+    DestR.w = BLOCKSIZE*SCALE;
+    DestR.h = BLOCKSIZE*SCALE;
     SDL_Texture *blocktextures[20];
     SDL_Rect BlockDest;
     BlockDest.x = 0;
@@ -154,7 +189,7 @@ int main(){
         BlockDest.x = -BLOCKSIZE * (i % 10);
         BlockDest.y = -BLOCKSIZE * ((i/10));
         SDL_BlitSurface(textures, nullptr, blocksurf, &BlockDest);
-        blocksurf = rotozoomSurface(blocksurf, 0.0, BLOCKSCALE, 0);
+        blocksurf = rotozoomSurface(blocksurf, 0.0, SCALE, 0);
         blocktex = SDL_CreateTextureFromSurface(renderer, blocksurf);
         blocktextures[i] = blocktex;
     }
@@ -168,8 +203,8 @@ int main(){
     // level generation stuff
     int min;
     int max;
-    int min_fl = 2;
-    int max_fl = 3;
+    int min_fl = 3;
+    int max_fl = 5;
     int last_column_height = 0;
     int column_height;
     int blocks[LVL_W][LVL_H] = { 0 };
@@ -180,6 +215,13 @@ int main(){
     // movement
     int playerX = 0;
     double playerspeed = 0.5;
+    bool jumping = false;
+    bool falling = false;
+    double jumpvelocity = 0;
+    int jumpheight = 75; // pixels
+    int terrainheight = 1; // blocks
+    // jumpmax has no use at the moment, but I'll need it later
+    int jumpmax = 0; // pixels
 
     // game loop
     while (!quit) {
@@ -196,9 +238,8 @@ int main(){
             fps_frames = 0;
         }
 
-        // FPS-counter in the window title!
+        // fps display
         std::stringstream ss;
-        //ss << "delay_std: " << delay_std << " delay_actual: " << delay_actual << " deltatime: " << delta_time << " FPS: " << fps_current;
         ss <<" FPS: " << fps_current;
         SDL_SetWindowTitle(window, ss.str().c_str());
 
@@ -214,20 +255,32 @@ int main(){
         }
 
         // key states
-        if (state[SDL_SCANCODE_SPACE]) playerdest.y -= 1;
         if (state[SDL_SCANCODE_D]) playerX += playerspeed * delta_time;
+        if (state[SDL_SCANCODE_SPACE]) jump(jumping, jumpvelocity, jumpmax, terrainheight, jumpheight);
 
         // mouse states & position
         mouse_buttons = SDL_GetMouseState(&mouseX, &mouseY);
         if (mouse_buttons & SDL_BUTTON_LMASK) ;// do something
 
-        // player has passed a block --> create new column
-        if (playerX >= BLOCKSIZE*BLOCKSCALE) {
+        // player has passed a block --> create new column + set new terrainheight
+        if (playerX >= BLOCKSIZE*SCALE) {
             for (int i = 1; i < LVL_W; i++) {
                 for (int j = 0; j < LVL_H; j++) {
                     blocks[i-1][j] = blocks[i][j];
                 }
             }
+            int new_terrainheight = 0;
+            for (int i = 0; blocks[2][i] > 0; i ++) {
+                new_terrainheight++;
+            }
+            if (terrainheight > new_terrainheight && !jumping) {
+                fall(jumping, jumpvelocity);
+                falling = true;
+            }
+            else if (terrainheight < new_terrainheight && !jumping) {
+                jump(jumping, jumpvelocity, jumpmax, terrainheight, jumpheight);
+            }
+            terrainheight = new_terrainheight;
             generate_column(LVL_W-1, blocks, min, max, min_fl, max_fl, flattener, column_height, last_column_height);
             texture_column(LVL_W-2, blocks);
             playerX = 0;
@@ -235,17 +288,29 @@ int main(){
 
         // render blocks
         for (int i = 0; i < LVL_W; i++) {
-            DestR.x = (i*BLOCKSIZE*BLOCKSCALE) - playerX;
+            DestR.x = (i*BLOCKSIZE*SCALE) - playerX;
             for (int j = LVL_H; j >= 0; j--) {
                 if (blocks[i][j] > 0) {
-                    DestR.y = WINDOW_HEIGHT-((j+1)*BLOCKSIZE*BLOCKSCALE);
+                    DestR.y = WINDOW_HEIGHT-((j+1)*BLOCKSIZE*SCALE);
                     SDL_RenderCopy(renderer, blocktextures[blocks[i][j]], &SrcR, &DestR);
                 }
             }
         }
 
         // player
-        SDL_RenderCopy(renderer, playertex, &playersrc, &playerdest);
+        if (jumping) {
+            if (playerdest.y > WINDOW_HEIGHT-(terrainheight*BLOCKSIZE*SCALE)-(2*BLOCKSIZE*SCALE)) {
+                playerdest.y = WINDOW_HEIGHT-(terrainheight*BLOCKSIZE*SCALE)-(2*BLOCKSIZE*SCALE);
+                jumping = false;
+                falling = false;
+            }
+            else {
+                // 0.5s air time per jump, regardless of jump high
+                jumpvelocity -= 4*(delta_time/1000); // factor 2 would be 1s air time
+                playerdest.y += 10*(-jumpvelocity); // factor 10 because I say so (stop questioning my code)
+            }
+        }
+        SDL_RenderCopy(renderer, get_player_frame(playerframes, frameindex, frametimer, _frametimer, delta_time), &playersrc, &playerdest);
 
         SDL_RenderPresent(renderer);
     }
