@@ -30,7 +30,7 @@ void generate_column(int column, int (&blocks)[LVL_W][LVL_H], int& min, int& max
         min = last_column_height - 1;
         max = last_column_height + 1;
         if (min < 0) min = 0;
-        if (max > 7) max = 7;
+        if (max > 6) max = 6;
         column_height = randrange(min, max);
         flattener = randrange(min_fl, max_fl);
     }
@@ -90,7 +90,13 @@ void fall(bool &jumping, double &jumpvelocity) {
     jumpvelocity = 0;
 }
 
-SDL_Texture* get_player_frame(SDL_Texture* playerframes[8], int &frameindex, double frametimer, double &_frametimer, double deltatime) {
+void runup(bool &run_up, double &speed_multiplier) {
+    run_up = true;
+    speed_multiplier -= 0.05;
+}
+
+SDL_Texture* get_player_frame(SDL_Texture* playerframes[8], int &frameindex, double frametimer, double &_frametimer, double deltatime, Uint8 running) {
+    if (!running) return playerframes[0];
     if (_frametimer < 0) {
         if (frameindex >= 7) frameindex = 0;
         else frameindex++;
@@ -216,12 +222,15 @@ int main(){
     int playerX = 0;
     double playerspeed = 0.5;
     bool jumping = false;
-    bool falling = false;
     double jumpvelocity = 0;
     int jumpheight = 75; // pixels
-    int terrainheight = 1; // blocks
+    int terrainheight = 2; // blocks
+    int terrainheight0 = 0;
+    int terrainheight1 = 0;
     // jumpmax has no use at the moment, but I'll need it later
     int jumpmax = 0; // pixels
+    bool run_up = false;
+    double speed_multiplier = 1;
 
     // game loop
     while (!quit) {
@@ -240,7 +249,7 @@ int main(){
 
         // fps display
         std::stringstream ss;
-        ss <<" FPS: " << fps_current;
+        ss <<" FPS: " << fps_current << "    Speed Multiplier: " << speed_multiplier;
         SDL_SetWindowTitle(window, ss.str().c_str());
 
         // clear buffer
@@ -255,7 +264,10 @@ int main(){
         }
 
         // key states
-        if (state[SDL_SCANCODE_D]) playerX += playerspeed * delta_time;
+        if (state[SDL_SCANCODE_D]){
+            playerX += playerspeed * delta_time * speed_multiplier;
+            speed_multiplier += 0.00001*delta_time;
+        }
         if (state[SDL_SCANCODE_SPACE]) jump(jumping, jumpvelocity, jumpmax, terrainheight, jumpheight);
 
         // mouse states & position
@@ -264,23 +276,24 @@ int main(){
 
         // player has passed a block --> create new column + set new terrainheight
         if (playerX >= BLOCKSIZE*SCALE) {
+            run_up = false;
             for (int i = 1; i < LVL_W; i++) {
                 for (int j = 0; j < LVL_H; j++) {
                     blocks[i-1][j] = blocks[i][j];
                 }
             }
-            int new_terrainheight = 0;
-            for (int i = 0; blocks[2][i] > 0; i ++) {
-                new_terrainheight++;
-            }
-            if (terrainheight > new_terrainheight && !jumping) {
+            // terrainheight --> column behind the player
+            terrainheight0 = terrainheight1; // column the player just reached
+            terrainheight1 = 0; // column in front of the player
+            for (int i = 0; blocks[3][i] > 0; i ++) terrainheight1++;
+            if (terrainheight0 > terrainheight1 && !jumping) {
+                terrainheight0 -= 1;
                 fall(jumping, jumpvelocity);
-                falling = true;
             }
-            else if (terrainheight < new_terrainheight && !jumping) {
-                jump(jumping, jumpvelocity, jumpmax, terrainheight, jumpheight);
+            else if (terrainheight0 < terrainheight1 && !jumping) {
+                runup(run_up, speed_multiplier);
             }
-            terrainheight = new_terrainheight;
+            terrainheight = terrainheight0;
             generate_column(LVL_W-1, blocks, min, max, min_fl, max_fl, flattener, column_height, last_column_height);
             texture_column(LVL_W-2, blocks);
             playerX = 0;
@@ -298,19 +311,27 @@ int main(){
         }
 
         // player
-        if (jumping) {
-            if (playerdest.y > WINDOW_HEIGHT-(terrainheight*BLOCKSIZE*SCALE)-(2*BLOCKSIZE*SCALE)) {
+        if (run_up) {
+            playerdest.y = WINDOW_HEIGHT - ((terrainheight1 - 1) * BLOCKSIZE * SCALE) - (2 * BLOCKSIZE * SCALE) - playerX;
+        }
+        else if (jumping) {
+            // make the player run against the ramp if he touches it while he's jumping
+            if (terrainheight0 < terrainheight1 && playerdest.y > WINDOW_HEIGHT - ((terrainheight1 - 1) * BLOCKSIZE * SCALE) - (2 * BLOCKSIZE * SCALE) - playerX) {
+                runup(run_up, speed_multiplier);
+            }
+            // stop jumping as the player touches the ground
+            else if (playerdest.y > WINDOW_HEIGHT-(terrainheight*BLOCKSIZE*SCALE)-(2*BLOCKSIZE*SCALE)) {
                 playerdest.y = WINDOW_HEIGHT-(terrainheight*BLOCKSIZE*SCALE)-(2*BLOCKSIZE*SCALE);
                 jumping = false;
-                falling = false;
             }
+            // the player is still in the air
             else {
                 // 0.5s air time per jump, regardless of jump high
                 jumpvelocity -= 4*(delta_time/1000); // factor 2 would be 1s air time
                 playerdest.y += 10*(-jumpvelocity); // factor 10 because I say so (stop questioning my code)
             }
         }
-        SDL_RenderCopy(renderer, get_player_frame(playerframes, frameindex, frametimer, _frametimer, delta_time), &playersrc, &playerdest);
+        SDL_RenderCopy(renderer, get_player_frame(playerframes, frameindex, frametimer, _frametimer, delta_time, state[SDL_SCANCODE_D]), &playersrc, &playerdest);
 
         SDL_RenderPresent(renderer);
     }
