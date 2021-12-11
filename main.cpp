@@ -3,6 +3,7 @@
 #include <SDL.h>
 #include <SDL_image.h>
 #include <SDL2_rotozoom.h>
+#include <SDL_ttf.h>
 
 #define WINDOW_WIDTH 800
 #define WINDOW_HEIGHT 450
@@ -90,20 +91,30 @@ void fall(bool &jumping, double &jumpvelocity) {
     jumpvelocity = 0;
 }
 
-void runup(bool &run_up, double &speed_multiplier) {
+void runup(bool &run_up, double &speed_multiplier, bool &slow) {
     run_up = true;
-    speed_multiplier -= 0.05;
+    speed_multiplier /= 1.1;
+    slow = true;
 }
 
-SDL_Texture* get_player_frame(SDL_Texture* playerframes[8], int &frameindex, double frametimer, double &_frametimer, double deltatime, Uint8 running) {
-    if (!running) return playerframes[0];
+SDL_Texture* get_player_frame(SDL_Texture* runframes[8], SDL_Texture* jumpframes[4], SDL_Texture* glideframes[2], int &frameindex, double frametimer, double &_frametimer, double deltatime, bool jumping, double speed_multiplier, double jumpvelocity, Uint8 gliding, Uint8 &glideframe) {
+    if (jumping){
+        if (jumpvelocity < 0 && gliding){
+            glideframe = !glideframe;
+            return glideframes[glideframe];
+        }
+        if (jumpvelocity > 0.5) return jumpframes[0];
+        else if (jumpvelocity > 0) return jumpframes[1];
+        else if (jumpvelocity > -0.5) return jumpframes[2];
+        else return jumpframes[3];
+    }
     if (_frametimer < 0) {
         if (frameindex >= 7) frameindex = 0;
         else frameindex++;
         _frametimer = frametimer;
     }
-    else _frametimer -= (deltatime/1000);
-    return playerframes[frameindex];
+    else _frametimer -= (deltatime/1000)*speed_multiplier*2;
+    return runframes[frameindex];
 }
 
 int main(){
@@ -114,6 +125,7 @@ int main(){
     // init SDL
     SDL_Init(SDL_INIT_VIDEO);
     IMG_Init(IMG_INIT_PNG);
+    TTF_Init();
 
     // hints
     SDL_SetHint(SDL_HINT_RENDER_VSYNC, "1");
@@ -122,6 +134,12 @@ int main(){
     // window and renderer
     SDL_Window * window = SDL_CreateWindow("Anima",SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, WINDOW_WIDTH, WINDOW_HEIGHT, 0);
     SDL_Renderer * renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR);
+
+    // fonts
+    // TTF_Font * font = TTF_OpenFont("../HelvetiPixel.ttf", 50);
+    // TTF_CloseFont(font);
+    // aparently this breaks the entire game, i still need to figure out why
 
     // fps
     #define FPS_INTERVAL 1.0
@@ -161,7 +179,9 @@ int main(){
     double frametimer = 0.1; // time between frame in seconds
     double _frametimer = frametimer;
     int frameindex = 0;
-    SDL_Texture *playerframes[8];
+    SDL_Texture *runframes[8];
+    SDL_Texture *jumpframes[4];
+    SDL_Texture *glideframes[2];
     for (int i = 0; i < 8; i++) {
         _playerblit.x = -BLOCKSIZE * i;
         _playerblit.y = -2*BLOCKSIZE;
@@ -169,9 +189,27 @@ int main(){
         SDL_BlitSurface(textures, nullptr, playersurf, &_playerblit);
         playersurf = rotozoomSurface(playersurf, 0.0, 5, 0);
         playertex = SDL_CreateTextureFromSurface(renderer, playersurf);
-        playerframes[i] = playertex;
+        runframes[i] = playertex;
     }
-    SDL_FreeSurface(playersurf);
+    for (int i = 0; i < 4; i++) {
+        _playerblit.x = -BLOCKSIZE * i;
+        _playerblit.y = -4*BLOCKSIZE;
+        playersurf = SDL_CreateRGBSurface(0,10,20,32, 0xff, 0xff00, 0xff0000, 0xff000000);
+        SDL_BlitSurface(textures, nullptr, playersurf, &_playerblit);
+        playersurf = rotozoomSurface(playersurf, 0.0, 5, 0);
+        playertex = SDL_CreateTextureFromSurface(renderer, playersurf);
+        jumpframes[i] = playertex;
+    }
+    for (int i = 0; i < 2; i++) {
+        _playerblit.x = (-BLOCKSIZE * i) -BLOCKSIZE*8;
+        _playerblit.y = -2*BLOCKSIZE;
+        playersurf = SDL_CreateRGBSurface(0,10,20,32, 0xff, 0xff00, 0xff0000, 0xff000000);
+        SDL_BlitSurface(textures, nullptr, playersurf, &_playerblit);
+        playersurf = rotozoomSurface(playersurf, 0.0, 5, 0);
+        playertex = SDL_CreateTextureFromSurface(renderer, playersurf);
+        glideframes[i] = playertex;
+    }
+ SDL_FreeSurface(playersurf);
 
     // blocks
     SDL_Rect SrcR;
@@ -212,7 +250,7 @@ int main(){
     int min_fl = 3;
     int max_fl = 5;
     int last_column_height = 0;
-    int column_height;
+    int column_height = 0;
     int blocks[LVL_W][LVL_H] = { 0 };
     int flattener = randrange(min_fl, max_fl);
     srand(time(NULL));
@@ -225,12 +263,20 @@ int main(){
     double jumpvelocity = 0;
     int jumpheight = 75; // pixels
     int terrainheight = 2; // blocks
-    int terrainheight0 = 0;
-    int terrainheight1 = 0;
+    int terrainheight0 = 2;
+    int terrainheight1 = 2;
     // jumpmax has no use at the moment, but I'll need it later
     int jumpmax = 0; // pixels
     bool run_up = false;
     double speed_multiplier = 1;
+    Uint8 glideframe = 0;
+
+    // slow overlay
+    bool slow = false;
+    double slowtimer = 0.4; // seconds
+    double slowtimer_max = 0.4;
+    Uint8 slowcolor = 128;
+    Uint8 slowcolor_max = 128;
 
     // game loop
     while (!quit) {
@@ -253,7 +299,6 @@ int main(){
         SDL_SetWindowTitle(window, ss.str().c_str());
 
         // clear buffer
-        SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR);
         SDL_RenderClear(renderer);
 
         // event handling
@@ -261,14 +306,22 @@ int main(){
             case SDL_QUIT:
                 quit = true;
                 break;
+            case SDL_KEYDOWN:
+                switch (event.key.keysym.sym)
+                {
+                    case SDLK_DOWN: // stomping
+                        playerdest.y = WINDOW_HEIGHT-(terrainheight*BLOCKSIZE*SCALE)-(2*BLOCKSIZE*SCALE);
+                        jumping = false;
+                        break;
+                }
+                break;
         }
 
+        playerX += playerspeed * delta_time * speed_multiplier;
         // key states
-        if (state[SDL_SCANCODE_D]){
-            playerX += playerspeed * delta_time * speed_multiplier;
-            speed_multiplier += 0.00001*delta_time;
-        }
         if (state[SDL_SCANCODE_SPACE]) jump(jumping, jumpvelocity, jumpmax, terrainheight, jumpheight);
+        if (state[SDL_SCANCODE_LEFT]) if (jumping && jumpvelocity < 0) jumpvelocity /= 1.5; // gliding
+        if (state[SDL_SCANCODE_L]) speed_multiplier += 0.05; // we do a little cheating
 
         // mouse states & position
         mouse_buttons = SDL_GetMouseState(&mouseX, &mouseY);
@@ -276,6 +329,7 @@ int main(){
 
         // player has passed a block --> create new column + set new terrainheight
         if (playerX >= BLOCKSIZE*SCALE) {
+            speed_multiplier += 0.001;
             run_up = false;
             for (int i = 1; i < LVL_W; i++) {
                 for (int j = 0; j < LVL_H; j++) {
@@ -286,12 +340,12 @@ int main(){
             terrainheight0 = terrainheight1; // column the player just reached
             terrainheight1 = 0; // column in front of the player
             for (int i = 0; blocks[3][i] > 0; i ++) terrainheight1++;
-            if (terrainheight0 > terrainheight1 && !jumping) {
+            if (terrainheight0 > terrainheight1) {
                 terrainheight0 -= 1;
                 fall(jumping, jumpvelocity);
             }
             else if (terrainheight0 < terrainheight1 && !jumping) {
-                runup(run_up, speed_multiplier);
+                runup(run_up, speed_multiplier, slow);
             }
             terrainheight = terrainheight0;
             generate_column(LVL_W-1, blocks, min, max, min_fl, max_fl, flattener, column_height, last_column_height);
@@ -317,7 +371,7 @@ int main(){
         else if (jumping) {
             // make the player run against the ramp if he touches it while he's jumping
             if (terrainheight0 < terrainheight1 && playerdest.y > WINDOW_HEIGHT - ((terrainheight1 - 1) * BLOCKSIZE * SCALE) - (2 * BLOCKSIZE * SCALE) - playerX) {
-                runup(run_up, speed_multiplier);
+                runup(run_up, speed_multiplier, slow);
             }
             // stop jumping as the player touches the ground
             else if (playerdest.y > WINDOW_HEIGHT-(terrainheight*BLOCKSIZE*SCALE)-(2*BLOCKSIZE*SCALE)) {
@@ -331,8 +385,23 @@ int main(){
                 playerdest.y += 10*(-jumpvelocity); // factor 10 because I say so (stop questioning my code)
             }
         }
-        SDL_RenderCopy(renderer, get_player_frame(playerframes, frameindex, frametimer, _frametimer, delta_time, state[SDL_SCANCODE_D]), &playersrc, &playerdest);
+        SDL_RenderCopy(renderer, get_player_frame(runframes, jumpframes, glideframes, frameindex, frametimer, _frametimer, delta_time, jumping, speed_multiplier, jumpvelocity, state[SDL_SCANCODE_LEFT], glideframe), &playersrc, &playerdest);
 
+        // slow overlay
+        if (slow) {
+            if (slowtimer < 0){
+                slow = false;
+                slowtimer = slowtimer_max;
+                slowcolor = slowcolor_max;
+                SDL_SetRenderDrawColor(renderer, BACKGROUND_COLOR);
+            }
+            else{
+                slowtimer -= (delta_time/1000);
+                slowcolor = 255 - ((slowtimer * (double) slowcolor_max)/slowtimer_max);
+                if (slowcolor < 128) slowcolor = 255;
+                SDL_SetRenderDrawColor(renderer, slowcolor, slowcolor, slowcolor, 255);
+            }
+        }
         SDL_RenderPresent(renderer);
     }
 
@@ -340,6 +409,7 @@ int main(){
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     IMG_Quit();
+    TTF_Quit();
     SDL_Quit();
 
     return 0;
